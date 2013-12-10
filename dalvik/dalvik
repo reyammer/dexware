@@ -1,0 +1,20 @@
+#!/bin/bash
+
+# usage: $0 -cp foo.jar Foo
+
+CURRDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+export ANDROID_ROOT=$CURRDIR/linux-x86
+
+mkdir -p /tmp/dalvik-data/dalvik-cache
+rm -f /tmp/dalvik-data/dalvik-cache/*
+export ANDROID_DATA=/tmp/dalvik-data
+
+$CURRDIR/linux-x86/bin/dalvikvm \
+-Xbootclasspath\
+:$ANDROID_ROOT/framework/core-hostdex.jar\
+:$ANDROID_ROOT/framework/conscrypt-hostdex.jar\
+:$ANDROID_ROOT/framework/okhttp-hostdex.jar\
+:$ANDROID_ROOT/framework/bouncycastle-hostdex.jar\
+:$ANDROID_ROOT/framework/apache-xml-hostdex.jar \
+$@
